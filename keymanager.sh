@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Enable strict error handling
+set -euo pipefail
+
 # Solana Key Manager Script
 # Usage: ./keymanager.sh [OPTIONS]
 
@@ -29,22 +32,28 @@ print_key() {
 
 # Check if container is running
 check_container() {
-    if ! docker ps | grep -q $CONTAINER_NAME; then
+    if ! docker ps | grep -q "$CONTAINER_NAME"; then
         print_error "Container is not running. Please start it first."
-        exit 1
+        exit 3
     fi
 }
 
 # Convert host path to container path
 host_to_container_path() {
     local host_path="$1"
-    echo "$host_path" | sed "s|$CONFIG_DIR|$CONTAINER_CONFIG_DIR|g; s|$ACCOUNTS_DIR|$CONTAINER_ACCOUNTS_DIR|g"
+    # Escape special characters for sed
+    local config_dir_escaped="${CONFIG_DIR//\//\\/}"
+    local accounts_dir_escaped="${ACCOUNTS_DIR//\//\\/}"
+    local container_config_escaped="${CONTAINER_CONFIG_DIR//\//\\/}"
+    local container_accounts_escaped="${CONTAINER_ACCOUNTS_DIR//\//\\/}"
+    
+    echo "$host_path" | sed "s|${config_dir_escaped}|${container_config_escaped}|g; s|${accounts_dir_escaped}|${container_accounts_escaped}|g"
 }
 
 # Get all key files
 get_key_files() {
     # Find all JSON files in both directories
-    find "$CONFIG_DIR" "$ACCOUNTS_DIR" -type f -name "*.json" 2>/dev/null | sort
+    find "$CONFIG_DIR" "$ACCOUNTS_DIR" -type f -name "*.json" 2>/dev/null | sort || true
 }
 
 # Show all keys
@@ -56,11 +65,14 @@ show_keys() {
     local found=0
     
     while IFS= read -r keyfile; do
-        if [ -f "$keyfile" ]; then
+        if [[ -f "$keyfile" ]]; then
             found=1
-            local filename=$(basename "$keyfile")
-            local container_path=$(host_to_container_path "$keyfile")
-            local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$container_path" 2>/dev/null)
+            local filename
+            filename=$(basename "$keyfile")
+            local container_path
+            container_path=$(host_to_container_path "$keyfile")
+            local pubkey
+            pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$container_path" 2>/dev/null || echo "Error reading key")
             
             print_key "$index" "$filename"
             echo "    Path: $keyfile"
@@ -70,19 +82,27 @@ show_keys() {
         fi
     done < <(get_key_files)
     
-    if [ $found -eq 0 ]; then
+    if [[ $found -eq 0 ]]; then
         print_warning "No keys found."
     fi
 }
 
 # Get key file by index
 get_key_by_index() {
-    local index=$1
-    local keys=($(get_key_files))
+    local index="$1"
     
-    if [ $index -lt 1 ] || [ $index -gt ${#keys[@]} ]; then
+    # Validate index is a positive integer
+    if ! [[ "$index" =~ ^[0-9]+$ ]]; then
+        print_error "Invalid key index: must be a positive integer"
+        exit 2
+    fi
+    
+    local keys=()
+    mapfile -t keys < <(get_key_files)
+    
+    if (( index < 1 || index > ${#keys[@]} )); then
         print_error "Invalid key index: $index. Valid range: 1-${#keys[@]}"
-        exit 1
+        exit 2
     fi
     
     echo "${keys[$((index-1))]}"
@@ -90,95 +110,135 @@ get_key_by_index() {
 
 # Get balance by key index
 get_balance_by_index() {
-    local index=$1
-    local keyfile=$(get_key_by_index $index)
+    local index="$1"
+    local keyfile
+    keyfile=$(get_key_by_index "$index")
     
     print_info "Getting balance for key #$index..."
     echo ""
     
-    local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
-    local balance=$(docker exec $CONTAINER_NAME solana balance "$keyfile" --url $RPC_URL 2>/dev/null)
+    local pubkey
+    pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$keyfile" 2>/dev/null || echo "")
     
-    if [ $? -eq 0 ]; then
+    if [[ -z "$pubkey" ]]; then
+        print_error "Failed to read public key for key #$index"
+        exit 1
+    fi
+    
+    local balance
+    balance=$(docker exec "$CONTAINER_NAME" solana balance "$keyfile" --url "$RPC_URL" 2>/dev/null || echo "")
+    
+    if [[ -n "$balance" ]]; then
         echo "Key #$index: $(basename "$keyfile")"
         echo "Public Key: $pubkey"
         echo "Balance: $balance"
     else
         print_error "Failed to get balance for key #$index"
+        exit 1
     fi
 }
 
 # Get balance by public key
 get_balance_by_pubkey() {
-    local pubkey=$1
+    local pubkey="$1"
     
-    print_info "Getting balance for public key: $pubkey"
+    # Validate public key format (basic check)
+    if ! [[ "$pubkey" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; then
+        print_error "Invalid public key format"
+        exit 2
+    fi
+    
+    print_info "Getting balance for public key: ${pubkey:0:8}...${pubkey: -8}"
     echo ""
     
-    local balance=$(docker exec $CONTAINER_NAME solana balance "$pubkey" --url $RPC_URL 2>/dev/null)
+    local balance
+    balance=$(docker exec "$CONTAINER_NAME" solana balance "$pubkey" --url "$RPC_URL" 2>/dev/null || echo "")
     
-    if [ $? -eq 0 ]; then
+    if [[ -n "$balance" ]]; then
         echo "Public Key: $pubkey"
         echo "Balance: $balance"
     else
-        print_error "Failed to get balance for public key: $pubkey"
+        print_error "Failed to get balance for public key"
+        exit 1
     fi
 }
 
 # Send SOL
 send_sol() {
-    local sender_type=$1
-    local sender_value=$2
-    local receiver=$3
-    local amount=$4
+    local sender_type="$1"
+    local sender_value="$2"
+    local receiver="$3"
+    local amount="$4"
+    
+    # Validate receiver public key format
+    if ! [[ "$receiver" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; then
+        print_error "Invalid receiver public key format"
+        exit 2
+    fi
+    
+    # Validate amount is a positive number
+    if ! [[ "$amount" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        print_error "Invalid amount: must be a positive number"
+        exit 2
+    fi
     
     local sender_keyfile=""
     
     # Determine sender keyfile
-    if [ "$sender_type" == "-n" ]; then
-        sender_keyfile=$(get_key_by_index $sender_value)
+    if [[ "$sender_type" == "-n" ]]; then
+        sender_keyfile=$(get_key_by_index "$sender_value")
         print_info "Sending from key #$sender_value..."
-    elif [ "$sender_type" == "-k" ]; then
+    elif [[ "$sender_type" == "-k" ]]; then
+        # Validate sender public key format
+        if ! [[ "$sender_value" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; then
+            print_error "Invalid sender public key format"
+            exit 2
+        fi
+        
         # Find keyfile by public key
-        local keys=($(get_key_files))
+        local keys=()
+        mapfile -t keys < <(get_key_files)
         for keyfile in "${keys[@]}"; do
-            local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
-            if [ "$pubkey" == "$sender_value" ]; then
-                sender_keyfile=$keyfile
+            local pubkey
+            pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$keyfile" 2>/dev/null || echo "")
+            if [[ "$pubkey" == "$sender_value" ]]; then
+                sender_keyfile="$keyfile"
                 break
             fi
         done
         
-        if [ -z "$sender_keyfile" ]; then
-            print_error "No keyfile found for public key: $sender_value"
+        if [[ -z "$sender_keyfile" ]]; then
+            print_error "No keyfile found for public key"
             exit 1
         fi
-        print_info "Sending from public key: $sender_value..."
+        print_info "Sending from public key: ${sender_value:0:8}...${sender_value: -8}"
     else
         print_error "Invalid sender type. Use -n for index or -k for public key."
-        exit 1
+        exit 2
     fi
     
     echo ""
     echo "Sender: $(basename "$sender_keyfile")"
-    echo "Receiver: $receiver"
+    echo "Receiver: ${receiver:0:8}...${receiver: -8}"
     echo "Amount: $amount SOL"
     echo ""
     
-    # Execute transfer
-    local result=$(docker exec $CONTAINER_NAME solana transfer \
+    # Execute transfer with proper quoting
+    local result
+    result=$(docker exec "$CONTAINER_NAME" solana transfer \
         --from "$sender_keyfile" \
-        "$receiver" \
+        -- "$receiver" \
         "$amount" \
-        --url $RPC_URL \
-        --allow-unfunded-recipient 2>&1)
+        --url "$RPC_URL" \
+        --allow-unfunded-recipient 2>&1) || local transfer_failed=true
     
-    if [ $? -eq 0 ]; then
+    if [[ -z "${transfer_failed:-}" ]]; then
         print_info "Transfer successful!"
         echo "$result"
     else
         print_error "Transfer failed!"
         echo "$result"
+        exit 1
     fi
 }
 
@@ -188,81 +248,101 @@ show_block() {
     echo ""
     
     # Get current slot
-    local slot=$(docker exec $CONTAINER_NAME solana slot --url $RPC_URL 2>/dev/null)
-    if [ $? -eq 0 ]; then
+    local slot
+    slot=$(docker exec "$CONTAINER_NAME" solana slot --url "$RPC_URL" 2>/dev/null || echo "")
+    if [[ -n "$slot" ]]; then
         echo "Current Slot: $slot"
     fi
     
     # Get block height
-    local block_height=$(docker exec $CONTAINER_NAME solana block-height --url $RPC_URL 2>/dev/null)
-    if [ $? -eq 0 ]; then
+    local block_height
+    block_height=$(docker exec "$CONTAINER_NAME" solana block-height --url "$RPC_URL" 2>/dev/null || echo "")
+    if [[ -n "$block_height" ]]; then
         echo "Block Height: $block_height"
     fi
     
     # Get epoch info
     echo ""
     echo "Epoch Information:"
-    docker exec $CONTAINER_NAME solana epoch-info --url $RPC_URL 2>/dev/null
+    docker exec "$CONTAINER_NAME" solana epoch-info --url "$RPC_URL" 2>/dev/null || echo "Failed to retrieve epoch info"
     
     # Get transaction count
     echo ""
-    local tx_count=$(docker exec $CONTAINER_NAME solana transaction-count --url $RPC_URL 2>/dev/null)
-    if [ $? -eq 0 ]; then
+    local tx_count
+    tx_count=$(docker exec "$CONTAINER_NAME" solana transaction-count --url "$RPC_URL" 2>/dev/null || echo "")
+    if [[ -n "$tx_count" ]]; then
         echo "Total Transactions: $tx_count"
     fi
 }
 
 # Show specific block details
 show_block_details() {
-    local slot=$1
+    local slot="$1"
+    
+    # Validate slot is a positive integer
+    if ! [[ "$slot" =~ ^[0-9]+$ ]]; then
+        print_error "Invalid slot number: must be a positive integer"
+        exit 2
+    fi
     
     print_info "Block Details for Slot: $slot"
     echo ""
     
-    docker exec $CONTAINER_NAME solana block "$slot" --url $RPC_URL 2>/dev/null
-    
-    if [ $? -ne 0 ]; then
+    if ! docker exec "$CONTAINER_NAME" solana block "$slot" --url "$RPC_URL" 2>/dev/null; then
         print_error "Failed to get block details for slot: $slot"
+        exit 1
     fi
 }
 
 # Export private key
 export_key() {
-    local export_type=$1
-    local export_value=$2
-    local output_file=$3
+    local export_type="$1"
+    local export_value="$2"
+    local output_file="$3"
     
     local keyfile=""
     
     # Determine which key to export
-    if [ "$export_type" == "-n" ]; then
-        keyfile=$(get_key_by_index $export_value)
+    if [[ "$export_type" == "-n" ]]; then
+        keyfile=$(get_key_by_index "$export_value")
         print_info "Exporting key #$export_value..."
-    elif [ "$export_type" == "-pubkey" ]; then
+    elif [[ "$export_type" == "-pubkey" ]]; then
+        # Validate public key format
+        if ! [[ "$export_value" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; then
+            print_error "Invalid public key format"
+            exit 2
+        fi
+        
         # Find keyfile by public key
-        local keys=($(get_key_files))
+        local keys=()
+        mapfile -t keys < <(get_key_files)
         for kf in "${keys[@]}"; do
-            local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$kf" 2>/dev/null)
-            if [ "$pubkey" == "$export_value" ]; then
-                keyfile=$kf
+            local pubkey
+            pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$kf" 2>/dev/null || echo "")
+            if [[ "$pubkey" == "$export_value" ]]; then
+                keyfile="$kf"
                 break
             fi
         done
         
-        if [ -z "$keyfile" ]; then
-            print_error "No keyfile found for public key: $export_value"
+        if [[ -z "$keyfile" ]]; then
+            print_error "No keyfile found for public key"
             exit 1
         fi
-        print_info "Exporting key with public key: $export_value..."
+        print_info "Exporting key with public key: ${export_value:0:8}...${export_value: -8}"
     else
         print_error "Invalid export type. Use -n for index or -pubkey for public key."
-        exit 1
+        exit 2
     fi
     
-    # Determine output filename
-    if [ -z "$output_file" ]; then
-        local basename_key=$(basename "$keyfile" .json)
+    # Determine output filename with sanitization
+    if [[ -z "$output_file" ]]; then
+        local basename_key
+        basename_key=$(basename "$keyfile" .json)
         output_file="exported-${basename_key}-$(date +%Y%m%d-%H%M%S).json"
+    else
+        # Sanitize output filename to prevent directory traversal
+        output_file=$(basename "$output_file")
     fi
     
     echo ""
@@ -272,10 +352,9 @@ export_key() {
     echo ""
     
     # Copy the key file
-    cp "$keyfile" "$output_file"
-    
-    if [ $? -eq 0 ]; then
-        local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
+    if cp "$keyfile" "$output_file"; then
+        local pubkey
+        pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$keyfile" 2>/dev/null || echo "Unknown")
         
         print_info "Private key exported successfully!"
         echo ""
@@ -288,55 +367,72 @@ export_key() {
         print_warning "Anyone with this file can control your funds!"
     else
         print_error "Failed to export private key."
+        exit 1
     fi
 }
 
 # Import private key
 import_key() {
-    local import_file=$1
-    local key_name=$2
+    local import_file="$1"
+    local key_name="$2"
     
-    if [ -z "$import_file" ]; then
+    if [[ -z "$import_file" ]]; then
         print_error "Import file required. Usage: --import <file> [name]"
-        exit 1
+        exit 2
     fi
     
-    if [ ! -f "$import_file" ]; then
+    if [[ ! -f "$import_file" ]]; then
         print_error "File not found: $import_file"
         exit 1
     fi
     
-    print_info "Importing keypair from: $import_file"
+    print_info "Importing keypair from: $(basename "$import_file")"
     echo ""
     
+    # Generate unique temporary filename
+    local tmp_filename
+    tmp_filename=$(docker exec "$CONTAINER_NAME" mktemp -u /tmp/import-key-XXXXXX.json 2>/dev/null || echo "/tmp/import-key-$.json")
+    
     # Validate JSON format by copying to container first
-    docker cp "$import_file" "$CONTAINER_NAME:/tmp/import-key.json" 2>/dev/null
-    if ! docker exec $CONTAINER_NAME solana-keygen pubkey "/tmp/import-key.json" > /dev/null 2>&1; then
-        print_error "Invalid keypair file format."
-        docker exec $CONTAINER_NAME rm -f /tmp/import-key.json 2>/dev/null
+    if ! docker cp "$import_file" "$CONTAINER_NAME:$tmp_filename" 2>/dev/null; then
+        print_error "Failed to copy file to container"
         exit 1
     fi
     
+    if ! docker exec "$CONTAINER_NAME" solana-keygen pubkey "$tmp_filename" > /dev/null 2>&1; then
+        print_error "Invalid keypair file format."
+        docker exec "$CONTAINER_NAME" rm -f "$tmp_filename" 2>/dev/null || true
+        exit 2
+    fi
+    
     # Get public key
-    local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "/tmp/import-key.json" 2>/dev/null)
+    local pubkey
+    pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$tmp_filename" 2>/dev/null || echo "")
+    
+    if [[ -z "$pubkey" ]]; then
+        print_error "Failed to read public key from imported file"
+        docker exec "$CONTAINER_NAME" rm -f "$tmp_filename" 2>/dev/null || true
+        exit 1
+    fi
     
     # Determine key name
-    if [ -z "$key_name" ]; then
+    if [[ -z "$key_name" ]]; then
         key_name="imported-$(date +%Y%m%d-%H%M%S)"
     fi
     
-    # Sanitize keyname
+    # Sanitize keyname - prevent directory traversal
+    key_name=$(basename "$key_name" .json)
     key_name=$(echo "$key_name" | sed 's/[^a-zA-Z0-9_-]/_/g')
     
     local dest_file="$ACCOUNTS_DIR/${key_name}.json"
     
     # Check if destination exists
-    if [ -f "$dest_file" ]; then
+    if [[ -f "$dest_file" ]]; then
         print_warning "Key file already exists: $dest_file"
-        read -p "Overwrite? (yes/no): " confirm
-        if [ "$confirm" != "yes" ]; then
+        read -t 30 -p "Overwrite? (yes/no): " confirm || confirm="no"
+        if [[ "$confirm" != "yes" ]]; then
             print_info "Import cancelled."
-            docker exec $CONTAINER_NAME rm -f /tmp/import-key.json 2>/dev/null
+            docker exec "$CONTAINER_NAME" rm -f "$tmp_filename" 2>/dev/null || true
             return
         fi
     fi
@@ -345,10 +441,9 @@ import_key() {
     mkdir -p "$ACCOUNTS_DIR"
     
     # Copy the key from container to host
-    docker cp "$CONTAINER_NAME:/tmp/import-key.json" "$dest_file"
-    docker exec $CONTAINER_NAME rm -f /tmp/import-key.json 2>/dev/null
-    
-    if [ $? -eq 0 ]; then
+    if docker cp "$CONTAINER_NAME:$tmp_filename" "$dest_file" 2>/dev/null; then
+        docker exec "$CONTAINER_NAME" rm -f "$tmp_filename" 2>/dev/null || true
+        
         print_info "Keypair imported successfully!"
         echo ""
         echo "Name: $key_name"
@@ -357,35 +452,53 @@ import_key() {
         echo ""
         
         # Check balance
-        local balance=$(docker exec $CONTAINER_NAME solana balance "$dest_file" --url $RPC_URL 2>/dev/null)
-        if [ $? -eq 0 ]; then
+        local balance
+        balance=$(docker exec "$CONTAINER_NAME" solana balance "$dest_file" --url "$RPC_URL" 2>/dev/null || echo "")
+        if [[ -n "$balance" ]]; then
             echo "Current Balance: $balance"
         fi
     else
         print_error "Failed to import keypair."
+        docker exec "$CONTAINER_NAME" rm -f "$tmp_filename" 2>/dev/null || true
+        exit 1
     fi
 }
 
 # Airdrop SOL
 airdrop_sol() {
-    local target_type=$1
-    local target_value=$2
-    local amount=${3:-100}  # Default 100 SOL
+    local target_type="$1"
+    local target_value="$2"
+    local amount="${3:-100}"  # Default 100 SOL
+    
+    # Validate amount is a positive number
+    if ! [[ "$amount" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        print_error "Invalid amount: must be a positive number"
+        exit 2
+    fi
     
     local keyfile=""
     local pubkey=""
     
     # Determine target
-    if [ "$target_type" == "-n" ]; then
-        keyfile=$(get_key_by_index $target_value)
-        pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
+    if [[ "$target_type" == "-n" ]]; then
+        keyfile=$(get_key_by_index "$target_value")
+        pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$keyfile" 2>/dev/null || echo "")
+        if [[ -z "$pubkey" ]]; then
+            print_error "Failed to read public key for key #$target_value"
+            exit 1
+        fi
         print_info "Airdropping to key #$target_value..."
-    elif [ "$target_type" == "-k" ]; then
+    elif [[ "$target_type" == "-k" ]]; then
+        # Validate public key format
+        if ! [[ "$target_value" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; then
+            print_error "Invalid public key format"
+            exit 2
+        fi
         pubkey="$target_value"
-        print_info "Airdropping to public key: $pubkey..."
+        print_info "Airdropping to public key: ${pubkey:0:8}...${pubkey: -8}"
     else
         print_error "Invalid target type. Use -n for index or -k for public key."
-        exit 1
+        exit 2
     fi
     
     echo ""
@@ -396,43 +509,47 @@ airdrop_sol() {
     print_info "Requesting airdrop..."
     
     # Execute airdrop
-    local result=$(docker exec $CONTAINER_NAME solana airdrop "$amount" "$pubkey" --url $RPC_URL 2>&1)
+    local result
+    result=$(docker exec "$CONTAINER_NAME" solana airdrop "$amount" "$pubkey" --url "$RPC_URL" 2>&1) || local airdrop_failed=true
     
-    if [ $? -eq 0 ]; then
+    if [[ -z "${airdrop_failed:-}" ]]; then
         print_info "Airdrop successful!"
         echo "$result"
         
         # Show new balance
         echo ""
-        local balance=$(docker exec $CONTAINER_NAME solana balance "$pubkey" --url $RPC_URL 2>/dev/null)
-        if [ $? -eq 0 ]; then
+        local balance
+        balance=$(docker exec "$CONTAINER_NAME" solana balance "$pubkey" --url "$RPC_URL" 2>/dev/null || echo "")
+        if [[ -n "$balance" ]]; then
             echo "New Balance: $balance"
         fi
     else
         print_error "Airdrop failed!"
         echo "$result"
+        exit 1
     fi
 }
 
 # Generate new keypair
 generate_key() {
-    local keyname=$1
+    local keyname="$1"
     
-    if [ -z "$keyname" ]; then
+    if [[ -z "$keyname" ]]; then
         # Generate default name with timestamp
         keyname="wallet-$(date +%Y%m%d-%H%M%S)"
     fi
     
-    # Sanitize keyname (remove special characters)
+    # Sanitize keyname - prevent directory traversal
+    keyname=$(basename "$keyname" .json)
     keyname=$(echo "$keyname" | sed 's/[^a-zA-Z0-9_-]/_/g')
     
     local keyfile="$ACCOUNTS_DIR/${keyname}.json"
     
     # Check if file already exists
-    if [ -f "$keyfile" ]; then
+    if [[ -f "$keyfile" ]]; then
         print_error "Key file already exists: $keyfile"
-        read -p "Overwrite? (yes/no): " confirm
-        if [ "$confirm" != "yes" ]; then
+        read -t 30 -p "Overwrite? (yes/no): " confirm || confirm="no"
+        if [[ "$confirm" != "yes" ]]; then
             print_info "Key generation cancelled."
             return
         fi
@@ -445,16 +562,17 @@ generate_key() {
     mkdir -p "$ACCOUNTS_DIR"
     
     # Convert to container path
-    local container_keyfile=$(host_to_container_path "$keyfile")
+    local container_keyfile
+    container_keyfile=$(host_to_container_path "$keyfile")
     
     # Generate keypair
-    docker exec $CONTAINER_NAME solana-keygen new \
+    if docker exec "$CONTAINER_NAME" solana-keygen new \
         --no-bip39-passphrase \
         --outfile "$container_keyfile" \
-        --force 2>/dev/null
-    
-    if [ $? -eq 0 ]; then
-        local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$container_keyfile" 2>/dev/null)
+        --force 2>/dev/null; then
+        
+        local pubkey
+        pubkey=$(docker exec "$CONTAINER_NAME" solana-keygen pubkey "$container_keyfile" 2>/dev/null || echo "Unknown")
         
         print_info "Keypair generated successfully!"
         echo ""
@@ -466,23 +584,28 @@ generate_key() {
         
         # Optionally airdrop some SOL
         echo ""
-        read -p "Airdrop test SOL to this address? (yes/no): " airdrop_confirm
-        if [ "$airdrop_confirm" == "yes" ]; then
-            read -p "Amount (SOL): " amount
-            if [ ! -z "$amount" ]; then
+        read -t 30 -p "Airdrop test SOL to this address? (yes/no): " airdrop_confirm || airdrop_confirm="no"
+        if [[ "$airdrop_confirm" == "yes" ]]; then
+            read -t 30 -p "Amount (SOL): " amount || amount=""
+            if [[ -n "$amount" ]] && [[ "$amount" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
                 print_info "Requesting airdrop of $amount SOL..."
-                docker exec $CONTAINER_NAME solana airdrop "$amount" "$keyfile" --url $RPC_URL 2>/dev/null
-                if [ $? -eq 0 ]; then
+                if docker exec "$CONTAINER_NAME" solana airdrop "$amount" "$keyfile" --url "$RPC_URL" 2>/dev/null; then
                     print_info "Airdrop successful!"
-                    local balance=$(docker exec $CONTAINER_NAME solana balance "$keyfile" --url $RPC_URL 2>/dev/null)
-                    echo "New Balance: $balance"
+                    local balance
+                    balance=$(docker exec "$CONTAINER_NAME" solana balance "$keyfile" --url "$RPC_URL" 2>/dev/null || echo "")
+                    if [[ -n "$balance" ]]; then
+                        echo "New Balance: $balance"
+                    fi
                 else
                     print_error "Airdrop failed. You can request it later."
                 fi
+            elif [[ -n "$amount" ]]; then
+                print_error "Invalid amount. Skipping airdrop."
             fi
         fi
     else
         print_error "Failed to generate keypair."
+        exit 1
     fi
 }
 
@@ -578,22 +701,22 @@ case "$1" in
         show_keys
         ;;
     --balance)
-        if [ "$2" == "-n" ]; then
-            if [ -z "$3" ]; then
+        if [[ "$2" == "-n" ]]; then
+            if [[ -z "$3" ]]; then
                 print_error "Key index required. Usage: --balance -n <index>"
-                exit 1
+                exit 2
             fi
             get_balance_by_index "$3"
-        elif [ "$2" == "-k" ]; then
-            if [ -z "$3" ]; then
+        elif [[ "$2" == "-k" ]]; then
+            if [[ -z "$3" ]]; then
                 print_error "Public key required. Usage: --balance -k <pubkey>"
-                exit 1
+                exit 2
             fi
             get_balance_by_pubkey "$3"
         else
             print_error "Invalid option. Use -n for index or -k for public key."
             show_help
-            exit 1
+            exit 2
         fi
         ;;
     --send)
@@ -627,17 +750,17 @@ case "$1" in
         done
         
         # Validate required parameters
-        if [ -z "$sender_type" ] || [ -z "$sender_value" ] || [ -z "$receiver" ] || [ -z "$amount" ]; then
+        if [[ -z "$sender_type" ]] || [[ -z "$sender_value" ]] || [[ -z "$receiver" ]] || [[ -z "$amount" ]]; then
             print_error "Missing required parameters."
             echo "Usage: --send -n <index> -r <receiver> -a <amount>"
             echo "   or: --send -k <pubkey> -r <receiver> -a <amount>"
-            exit 1
+            exit 2
         fi
         
         send_sol "$sender_type" "$sender_value" "$receiver" "$amount"
         ;;
     --block)
-        if [ -z "$2" ]; then
+        if [[ -z "$2" ]]; then
             show_block
         else
             show_block_details "$2"
@@ -647,50 +770,50 @@ case "$1" in
         generate_key "$2"
         ;;
     --export)
-        if [ "$2" == "-n" ]; then
-            if [ -z "$3" ]; then
+        if [[ "$2" == "-n" ]]; then
+            if [[ -z "$3" ]]; then
                 print_error "Key index required. Usage: --export -n <index> [output_file]"
-                exit 1
+                exit 2
             fi
             export_key "-n" "$3" "$4"
-        elif [ "$2" == "-pubkey" ]; then
-            if [ -z "$3" ]; then
+        elif [[ "$2" == "-pubkey" ]]; then
+            if [[ -z "$3" ]]; then
                 print_error "Public key required. Usage: --export -pubkey <pubkey> [output_file]"
-                exit 1
+                exit 2
             fi
             export_key "-pubkey" "$3" "$4"
         else
             print_error "Invalid option. Use -n for index or -pubkey for public key."
             echo "Usage: --export -n <index> [output_file]"
             echo "   or: --export -pubkey <pubkey> [output_file]"
-            exit 1
+            exit 2
         fi
         ;;
     --import)
-        if [ -z "$2" ]; then
+        if [[ -z "$2" ]]; then
             print_error "Import file required. Usage: --import <file> [name]"
-            exit 1
+            exit 2
         fi
         import_key "$2" "$3"
         ;;
     --airdrop)
-        if [ "$2" == "-n" ]; then
-            if [ -z "$3" ]; then
+        if [[ "$2" == "-n" ]]; then
+            if [[ -z "$3" ]]; then
                 print_error "Key index required. Usage: --airdrop -n <index> [amount]"
-                exit 1
+                exit 2
             fi
             airdrop_sol "-n" "$3" "$4"
-        elif [ "$2" == "-k" ]; then
-            if [ -z "$3" ]; then
+        elif [[ "$2" == "-k" ]]; then
+            if [[ -z "$3" ]]; then
                 print_error "Public key required. Usage: --airdrop -k <pubkey> [amount]"
-                exit 1
+                exit 2
             fi
             airdrop_sol "-k" "$3" "$4"
         else
             print_error "Invalid option. Use -n for index or -k for public key."
             echo "Usage: --airdrop -n <index> [amount]"
             echo "   or: --airdrop -k <pubkey> [amount]"
-            exit 1
+            exit 2
         fi
         ;;
     --help|*)
