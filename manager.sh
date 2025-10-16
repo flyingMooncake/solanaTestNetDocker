@@ -288,7 +288,7 @@ start_validator() {
         --bind-address 0.0.0.0 \
         --gossip-port 8001 \
         --dynamic-port-range 8002-8020 \
-        --reset > /solana/validator.log 2>&1"
+        > /solana/validator.log 2>&1"
     
     sleep 5
     
