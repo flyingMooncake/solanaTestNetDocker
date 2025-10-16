@@ -8,29 +8,21 @@ CONFIG_DIR="./data/config"
 ACCOUNTS_DIR="./data/accounts"
 RPC_URL="http://localhost:8899"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
-# Helper function to print colored messages
+# Helper function to print messages
 print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    echo "[INFO] $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo "[ERROR] $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo "[WARNING] $1"
 }
 
 print_key() {
-    echo -e "${CYAN}[$1]${NC} $2"
+    echo "[$1] $2"
 }
 
 # Check if container is running
@@ -60,12 +52,41 @@ get_key_files() {
         keys+=("$ACCOUNTS_DIR/stake-account.json")
     fi
     
-    # Add any other keypairs in config and accounts directories
-    for keyfile in "$CONFIG_DIR"/*.json "$ACCOUNTS_DIR"/*.json; do
-        if [ -f "$keyfile" ] && [[ ! " ${keys[@]} " =~ " ${keyfile} " ]]; then
-            keys+=("$keyfile")
-        fi
-    done
+    # Add all other JSON files from config directory
+    if [ -d "$CONFIG_DIR" ]; then
+        for keyfile in "$CONFIG_DIR"/*.json; do
+            if [ -f "$keyfile" ]; then
+                local already_added=0
+                for existing in "${keys[@]}"; do
+                    if [ "$existing" = "$keyfile" ]; then
+                        already_added=1
+                        break
+                    fi
+                done
+                if [ $already_added -eq 0 ]; then
+                    keys+=("$keyfile")
+                fi
+            fi
+        done
+    fi
+    
+    # Add all JSON files from accounts directory
+    if [ -d "$ACCOUNTS_DIR" ]; then
+        for keyfile in "$ACCOUNTS_DIR"/*.json; do
+            if [ -f "$keyfile" ]; then
+                local already_added=0
+                for existing in "${keys[@]}"; do
+                    if [ "$existing" = "$keyfile" ]; then
+                        already_added=1
+                        break
+                    fi
+                done
+                if [ $already_added -eq 0 ]; then
+                    keys+=("$keyfile")
+                fi
+            fi
+        done
+    fi
     
     echo "${keys[@]}"
 }
@@ -122,9 +143,9 @@ get_balance_by_index() {
     local balance=$(docker exec $CONTAINER_NAME solana balance "$keyfile" --url $RPC_URL 2>/dev/null)
     
     if [ $? -eq 0 ]; then
-        echo -e "${CYAN}Key #$index:${NC} $(basename "$keyfile")"
+        echo "Key #$index: $(basename "$keyfile")"
         echo "Public Key: $pubkey"
-        echo -e "${GREEN}Balance: $balance${NC}"
+        echo "Balance: $balance"
     else
         print_error "Failed to get balance for key #$index"
     fi
@@ -141,7 +162,7 @@ get_balance_by_pubkey() {
     
     if [ $? -eq 0 ]; then
         echo "Public Key: $pubkey"
-        echo -e "${GREEN}Balance: $balance${NC}"
+        echo "Balance: $balance"
     else
         print_error "Failed to get balance for public key: $pubkey"
     fi
@@ -212,25 +233,25 @@ show_block() {
     # Get current slot
     local slot=$(docker exec $CONTAINER_NAME solana slot --url $RPC_URL 2>/dev/null)
     if [ $? -eq 0 ]; then
-        echo -e "${CYAN}Current Slot:${NC} $slot"
+        echo "Current Slot: $slot"
     fi
     
     # Get block height
     local block_height=$(docker exec $CONTAINER_NAME solana block-height --url $RPC_URL 2>/dev/null)
     if [ $? -eq 0 ]; then
-        echo -e "${CYAN}Block Height:${NC} $block_height"
+        echo "Block Height: $block_height"
     fi
     
     # Get epoch info
     echo ""
-    echo -e "${CYAN}Epoch Information:${NC}"
+    echo "Epoch Information:"
     docker exec $CONTAINER_NAME solana epoch-info --url $RPC_URL 2>/dev/null
     
     # Get transaction count
     echo ""
     local tx_count=$(docker exec $CONTAINER_NAME solana transaction-count --url $RPC_URL 2>/dev/null)
     if [ $? -eq 0 ]; then
-        echo -e "${CYAN}Total Transactions:${NC} $tx_count"
+        echo "Total Transactions: $tx_count"
     fi
 }
 
@@ -301,10 +322,10 @@ export_key() {
         
         print_info "Private key exported successfully!"
         echo ""
-        echo -e "${CYAN}File:${NC} $output_file"
-        echo -e "${CYAN}Public Key:${NC} $pubkey"
+        echo "File: $output_file"
+        echo "Public Key: $pubkey"
         echo ""
-        print_warning "⚠️  SECURITY WARNING ⚠️"
+        print_warning "SECURITY WARNING"
         print_warning "This file contains your PRIVATE KEY!"
         print_warning "Keep it secure and never share it with anyone!"
         print_warning "Anyone with this file can control your funds!"
@@ -331,20 +352,16 @@ import_key() {
     print_info "Importing keypair from: $import_file"
     echo ""
     
-    # Validate JSON format
-    if ! docker exec $CONTAINER_NAME solana-keygen pubkey "$import_file" > /dev/null 2>&1; then
-        # Try copying to container first
-        docker cp "$import_file" "$CONTAINER_NAME:/tmp/import-key.json" 2>/dev/null
-        if ! docker exec $CONTAINER_NAME solana-keygen pubkey "/tmp/import-key.json" > /dev/null 2>&1; then
-            print_error "Invalid keypair file format."
-            docker exec $CONTAINER_NAME rm -f /tmp/import-key.json 2>/dev/null
-            exit 1
-        fi
-        import_file="/tmp/import-key.json"
+    # Validate JSON format by copying to container first
+    docker cp "$import_file" "$CONTAINER_NAME:/tmp/import-key.json" 2>/dev/null
+    if ! docker exec $CONTAINER_NAME solana-keygen pubkey "/tmp/import-key.json" > /dev/null 2>&1; then
+        print_error "Invalid keypair file format."
+        docker exec $CONTAINER_NAME rm -f /tmp/import-key.json 2>/dev/null
+        exit 1
     fi
     
     # Get public key
-    local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$import_file" 2>/dev/null)
+    local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "/tmp/import-key.json" 2>/dev/null)
     
     # Determine key name
     if [ -z "$key_name" ]; then
@@ -370,26 +387,22 @@ import_key() {
     # Create accounts directory
     mkdir -p "$ACCOUNTS_DIR"
     
-    # Copy the key
-    if [[ "$import_file" == "/tmp/import-key.json" ]]; then
-        docker cp "$CONTAINER_NAME:$import_file" "$dest_file"
-        docker exec $CONTAINER_NAME rm -f /tmp/import-key.json 2>/dev/null
-    else
-        cp "$import_file" "$dest_file"
-    fi
+    # Copy the key from container to host
+    docker cp "$CONTAINER_NAME:/tmp/import-key.json" "$dest_file"
+    docker exec $CONTAINER_NAME rm -f /tmp/import-key.json 2>/dev/null
     
     if [ $? -eq 0 ]; then
         print_info "Keypair imported successfully!"
         echo ""
-        echo -e "${CYAN}Name:${NC} $key_name"
-        echo -e "${CYAN}File:${NC} $dest_file"
-        echo -e "${CYAN}Public Key:${NC} $pubkey"
+        echo "Name: $key_name"
+        echo "File: $dest_file"
+        echo "Public Key: $pubkey"
         echo ""
         
         # Check balance
         local balance=$(docker exec $CONTAINER_NAME solana balance "$dest_file" --url $RPC_URL 2>/dev/null)
         if [ $? -eq 0 ]; then
-            echo -e "${CYAN}Current Balance:${NC} $balance"
+            echo "Current Balance: $balance"
         fi
     else
         print_error "Failed to import keypair."
@@ -436,7 +449,7 @@ airdrop_sol() {
         echo ""
         local balance=$(docker exec $CONTAINER_NAME solana balance "$pubkey" --url $RPC_URL 2>/dev/null)
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}New Balance: $balance${NC}"
+            echo "New Balance: $balance"
         fi
     else
         print_error "Airdrop failed!"
@@ -485,9 +498,9 @@ generate_key() {
         
         print_info "Keypair generated successfully!"
         echo ""
-        echo -e "${CYAN}Name:${NC} $keyname"
-        echo -e "${CYAN}File:${NC} $keyfile"
-        echo -e "${CYAN}Public Key:${NC} $pubkey"
+        echo "Name: $keyname"
+        echo "File: $keyfile"
+        echo "Public Key: $pubkey"
         echo ""
         print_warning "Save this information! The private key is stored in: $keyfile"
         
@@ -502,7 +515,7 @@ generate_key() {
                 if [ $? -eq 0 ]; then
                     print_info "Airdrop successful!"
                     local balance=$(docker exec $CONTAINER_NAME solana balance "$keyfile" --url $RPC_URL 2>/dev/null)
-                    echo -e "${GREEN}New Balance: $balance${NC}"
+                    echo "New Balance: $balance"
                 else
                     print_error "Airdrop failed. You can request it later."
                 fi
@@ -516,11 +529,11 @@ generate_key() {
 # Show help
 show_help() {
     cat << EOF
-${GREEN}Solana Key Manager${NC}
+Solana Key Manager
 
 Usage: ./keymanager.sh [OPTION]
 
-${CYAN}Key Management:${NC}
+Key Management:
   --list                       List all available keys with indices
   --generate [name]            Generate new keypair (optional: specify name)
   --export -n <index> [file]   Export private key by index to JSON file
@@ -528,7 +541,7 @@ ${CYAN}Key Management:${NC}
                                Export private key by public key to JSON file
   --import <file> [name]       Import private key from JSON file
 
-${CYAN}Balance Operations:${NC}
+Balance Operations:
   --balance -n <index>         Show balance of key by index number
   --balance -k <pubkey>        Show balance of key by public key
   --airdrop -n <index> [amount]
@@ -536,62 +549,62 @@ ${CYAN}Balance Operations:${NC}
   --airdrop -k <pubkey> [amount]
                                Airdrop SOL to public key (default: 100 SOL)
 
-${CYAN}Transfer Operations:${NC}
+Transfer Operations:
   --send -n <index> -r <receiver> -a <amount>
                                Send SOL from key index to receiver
   --send -k <pubkey> -r <receiver> -a <amount>
                                Send SOL from public key to receiver
 
-${CYAN}Block Information:${NC}
+Block Information:
   --block                      Show current block/slot information
   --block <slot>               Show specific block details by slot number
 
-${CYAN}Examples:${NC}
-  ${YELLOW}# List all keys${NC}
+Examples:
+  # List all keys
   ./keymanager.sh --list
 
-  ${YELLOW}# Generate new keypair with auto-generated name${NC}
+  # Generate new keypair with auto-generated name
   ./keymanager.sh --generate
 
-  ${YELLOW}# Generate new keypair with custom name${NC}
+  # Generate new keypair with custom name
   ./keymanager.sh --generate my-wallet
 
-  ${YELLOW}# Export key #1 to file${NC}
+  # Export key #1 to file
   ./keymanager.sh --export -n 1
   ./keymanager.sh --export -n 1 my-backup.json
 
-  ${YELLOW}# Export key by public key${NC}
+  # Export key by public key
   ./keymanager.sh --export -pubkey 7xJ...abc backup.json
 
-  ${YELLOW}# Import key from file${NC}
+  # Import key from file
   ./keymanager.sh --import my-key.json
   ./keymanager.sh --import my-key.json my-wallet
 
-  ${YELLOW}# Get balance of key #1${NC}
+  # Get balance of key #1
   ./keymanager.sh --balance -n 1
 
-  ${YELLOW}# Get balance by public key${NC}
+  # Get balance by public key
   ./keymanager.sh --balance -k 7xJ...abc
 
-  ${YELLOW}# Airdrop 100 SOL to key #1 (default amount)${NC}
+  # Airdrop 100 SOL to key #1 (default amount)
   ./keymanager.sh --airdrop -n 1
 
-  ${YELLOW}# Airdrop 500 SOL to key #2${NC}
+  # Airdrop 500 SOL to key #2
   ./keymanager.sh --airdrop -n 2 500
 
-  ${YELLOW}# Airdrop to public key${NC}
+  # Airdrop to public key
   ./keymanager.sh --airdrop -k 7xJ...abc 1000
 
-  ${YELLOW}# Send 10 SOL from key #1 to another address${NC}
+  # Send 10 SOL from key #1 to another address
   ./keymanager.sh --send -n 1 -r 7xJ...xyz -a 10
 
-  ${YELLOW}# Send 5 SOL from public key to another address${NC}
+  # Send 5 SOL from public key to another address
   ./keymanager.sh --send -k 7xJ...abc -r 7xJ...xyz -a 5
 
-  ${YELLOW}# Show current block info${NC}
+  # Show current block info
   ./keymanager.sh --block
 
-  ${YELLOW}# Show specific block details${NC}
+  # Show specific block details
   ./keymanager.sh --block 12345
 
 EOF
