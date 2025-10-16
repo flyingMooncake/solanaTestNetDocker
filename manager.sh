@@ -285,11 +285,9 @@ start_validator() {
     docker exec -d $CONTAINER_NAME bash -c "solana-test-validator \
         --ledger /solana/ledger \
         --rpc-port 8899 \
-        --rpc-bind-address 0.0.0.0 \
+        --bind-address 0.0.0.0 \
         --gossip-port 8001 \
-        --gossip-host 0.0.0.0 \
         --dynamic-port-range 8002-8020 \
-        --no-poh-speed-test \
         --reset > /solana/validator.log 2>&1"
     
     sleep 5
