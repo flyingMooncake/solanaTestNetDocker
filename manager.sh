@@ -35,6 +35,18 @@ check_docker() {
     fi
 }
 
+# Detect docker-compose command
+get_docker_compose_cmd() {
+    if docker compose version &> /dev/null; then
+        echo "docker compose"
+    elif command -v docker-compose &> /dev/null; then
+        echo "docker-compose"
+    else
+        print_error "Docker Compose is not installed. Please run: ./manager.sh --install"
+        exit 1
+    fi
+}
+
 # Install prerequisites
 install_prerequisites() {
     print_info "Checking and installing prerequisites..."
@@ -209,15 +221,18 @@ install_prerequisites() {
 init_network() {
     print_info "Initializing new Solana test network..."
     
+    # Get docker-compose command
+    COMPOSE_CMD=$(get_docker_compose_cmd)
+    
     # Create necessary directories
     mkdir -p "$LEDGER_DIR" "$CONFIG_DIR" "$ACCOUNTS_DIR"
     
     # Build and start the container
     print_info "Building Docker image..."
-    docker-compose build
+    $COMPOSE_CMD build
     
     print_info "Starting container..."
-    docker-compose up -d
+    $COMPOSE_CMD up -d
     
     # Wait for container to be ready
     sleep 3
@@ -249,10 +264,13 @@ init_network() {
 start_validator() {
     print_info "Starting Solana validator..."
     
+    # Get docker-compose command
+    COMPOSE_CMD=$(get_docker_compose_cmd)
+    
     # Check if container is running
     if ! docker ps | grep -q $CONTAINER_NAME; then
         print_error "Container is not running. Starting container first..."
-        docker-compose up -d
+        $COMPOSE_CMD up -d
         sleep 3
     fi
     
@@ -302,7 +320,8 @@ stop_validator() {
 # Stop Docker container
 stop_docker() {
     print_info "Stopping Docker container..."
-    docker-compose down
+    COMPOSE_CMD=$(get_docker_compose_cmd)
+    $COMPOSE_CMD down
     print_info "Container stopped successfully!"
 }
 
