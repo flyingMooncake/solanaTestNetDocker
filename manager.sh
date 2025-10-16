@@ -608,7 +608,7 @@ Options:
   --install                    Check and install prerequisites (Docker, Docker Compose)
   --init                       Initialize new network (creates genesis and keys)
   --validate                   Start validator
-  --stops                      Stop Docker container
+  --stop                       Stop Docker container
   --validate -s                Stop validator only
   --purge                      Delete all ledger data and configurations
   --connect <ip:port>          Connect to another node and share validation
@@ -630,7 +630,7 @@ General Examples:
   ./manager.sh --init
   ./manager.sh --validate
   ./manager.sh --validate -s
-  ./manager.sh --stops
+  ./manager.sh --stop
   ./manager.sh --connect 192.168.1.100:8001
   ./manager.sh --purge
 
@@ -654,7 +654,7 @@ case "$1" in
             start_validator
         fi
         ;;
-    --stops)
+    --stop)
         check_docker
         stop_docker
         ;;

@@ -19,10 +19,13 @@ RUN apt-get update && apt-get install -y \
 # Update CA certificates
 RUN update-ca-certificates
 
-# Install Solana CLI tools
-RUN curl -sSfL https://release.solana.com/v1.18.18/install -o /tmp/solana-install.sh && \
-    sh /tmp/solana-install.sh && \
-    rm /tmp/solana-install.sh
+# Install Solana CLI tools - download tarball directly
+RUN cd /tmp && \
+    wget https://github.com/solana-labs/solana/releases/download/v1.18.18/solana-release-x86_64-unknown-linux-gnu.tar.bz2 && \
+    tar jxf solana-release-x86_64-unknown-linux-gnu.tar.bz2 && \
+    mkdir -p /root/.local/share/solana/install && \
+    mv solana-release /root/.local/share/solana/install/active_release && \
+    rm solana-release-x86_64-unknown-linux-gnu.tar.bz2
 
 # Add Solana to PATH
 ENV PATH="/root/.local/share/solana/install/active_release/bin:${PATH}"
