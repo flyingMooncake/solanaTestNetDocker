@@ -11,15 +11,21 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     lsb-release \
     bzip2 \
+    build-essential \
+    pkg-config \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Solana CLI tools
-RUN sh -c "$(curl -sSfL https://release.solana.com/v1.18.18/install)" && \
-    /root/.local/share/solana/install/active_release/bin/solana --version
+# Update CA certificates
+RUN update-ca-certificates
 
-# Add Solana to PATH for all shells
+# Install Solana CLI tools
+RUN curl -sSfL https://release.solana.com/v1.18.18/install -o /tmp/solana-install.sh && \
+    sh /tmp/solana-install.sh && \
+    rm /tmp/solana-install.sh
+
+# Add Solana to PATH
 ENV PATH="/root/.local/share/solana/install/active_release/bin:${PATH}"
-RUN echo 'export PATH="/root/.local/share/solana/install/active_release/bin:$PATH"' >> /root/.bashrc
 
 # Create directories for ledger and configuration
 RUN mkdir -p /solana/ledger /solana/config /solana/accounts
