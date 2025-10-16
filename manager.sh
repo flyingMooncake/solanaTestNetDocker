@@ -263,6 +263,10 @@ init_network() {
     print_info "Generating vote account..."
     docker exec "$CONTAINER_NAME" "$solana_bin/solana-keygen" new --no-bip39-passphrase -o /solana/config/vote-account-keypair.json --force
     
+    # Generate stake account
+    print_info "Generating stake account..."
+    docker exec "$CONTAINER_NAME" "$solana_bin/solana-keygen" new --no-bip39-passphrase -o /solana/accounts/stake-account.json --force
+    
     # Create genesis config
     print_info "Creating genesis configuration..."
     docker exec "$CONTAINER_NAME" bash -c "cd /solana/ledger && $solana_bin/solana-genesis \
