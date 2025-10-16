@@ -6,6 +6,8 @@
 CONTAINER_NAME="solana-testnet"
 CONFIG_DIR="./data/config"
 ACCOUNTS_DIR="./data/accounts"
+CONTAINER_CONFIG_DIR="/solana/config"
+CONTAINER_ACCOUNTS_DIR="/solana/accounts"
 RPC_URL="http://localhost:8899"
 
 # Helper function to print messages
@@ -33,6 +35,12 @@ check_container() {
     fi
 }
 
+# Convert host path to container path
+host_to_container_path() {
+    local host_path="$1"
+    echo "$host_path" | sed "s|$CONFIG_DIR|$CONTAINER_CONFIG_DIR|g; s|$ACCOUNTS_DIR|$CONTAINER_ACCOUNTS_DIR|g"
+}
+
 # Get all key files
 get_key_files() {
     # Find all JSON files in both directories
@@ -51,7 +59,8 @@ show_keys() {
         if [ -f "$keyfile" ]; then
             found=1
             local filename=$(basename "$keyfile")
-            local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
+            local container_path=$(host_to_container_path "$keyfile")
+            local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$container_path" 2>/dev/null)
             
             print_key "$index" "$filename"
             echo "    Path: $keyfile"
