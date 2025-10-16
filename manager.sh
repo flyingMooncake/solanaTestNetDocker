@@ -270,13 +270,12 @@ init_network() {
     # Create genesis config
     print_info "Creating genesis configuration..."
     docker exec "$CONTAINER_NAME" bash -c "cd /solana/ledger && $solana_bin/solana-genesis \
+        --ledger /solana/ledger \
+        --faucet-lamports 500000000000000000 \
         --bootstrap-validator \
         /solana/config/validator-keypair.json \
         /solana/config/vote-account-keypair.json \
-        /solana/accounts/stake-account.json \
-        --ledger /solana/ledger \
-        --faucet-lamports 500000000000000000 \
-        --hashes-per-tick auto"
+        /solana/accounts/stake-account.json"
     
     print_info "Network initialized successfully!"
     local validator_pubkey
