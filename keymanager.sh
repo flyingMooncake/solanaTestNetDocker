@@ -444,14 +444,17 @@ generate_key() {
     # Create accounts directory if it doesn't exist
     mkdir -p "$ACCOUNTS_DIR"
     
+    # Convert to container path
+    local container_keyfile=$(host_to_container_path "$keyfile")
+    
     # Generate keypair
     docker exec $CONTAINER_NAME solana-keygen new \
         --no-bip39-passphrase \
-        --outfile "$keyfile" \
+        --outfile "$container_keyfile" \
         --force 2>/dev/null
     
     if [ $? -eq 0 ]; then
-        local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
+        local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$container_keyfile" 2>/dev/null)
         
         print_info "Keypair generated successfully!"
         echo ""
