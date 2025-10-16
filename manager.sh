@@ -315,6 +315,53 @@ stop_validator() {
     fi
 }
 
+# Pause validator
+pause_validator() {
+    print_info "Pausing Solana validator..."
+    
+    # Get the PID of the validator process
+    PID=$(docker exec $CONTAINER_NAME pgrep -f "solana-test-validator\|solana-validator" 2>/dev/null)
+    
+    if [ -z "$PID" ]; then
+        print_warning "Validator is not running."
+        return
+    fi
+    
+    # Send SIGSTOP to pause the process
+    docker exec $CONTAINER_NAME kill -STOP $PID
+    
+    if [ $? -eq 0 ]; then
+        print_info "Validator paused successfully (PID: $PID)"
+        print_info "Process is suspended but still in memory"
+        print_info "To resume: ./manager.sh --validate -r"
+    else
+        print_error "Failed to pause validator"
+    fi
+}
+
+# Resume validator
+resume_validator() {
+    print_info "Resuming Solana validator..."
+    
+    # Get the PID of the validator process
+    PID=$(docker exec $CONTAINER_NAME pgrep -f "solana-test-validator\|solana-validator" 2>/dev/null)
+    
+    if [ -z "$PID" ]; then
+        print_warning "Validator is not running."
+        return
+    fi
+    
+    # Send SIGCONT to resume the process
+    docker exec $CONTAINER_NAME kill -CONT $PID
+    
+    if [ $? -eq 0 ]; then
+        print_info "Validator resumed successfully (PID: $PID)"
+        print_info "Process is now active again"
+    else
+        print_error "Failed to resume validator"
+    fi
+}
+
 # Stop Docker container
 stop_docker() {
     print_info "Stopping Docker container..."
@@ -352,28 +399,36 @@ connect_node() {
         exit 1
     fi
     
-    print_info "Connecting to node at $node_address..."
+    print_info "Connecting to node at $node_address as RPC-only (non-validating)..."
     
     # Stop current validator if running
-    if docker exec $CONTAINER_NAME pgrep -f solana-test-validator > /dev/null 2>&1; then
+    if docker exec $CONTAINER_NAME pgrep -f "solana-validator\|solana-test-validator" > /dev/null 2>&1; then
         print_info "Stopping current validator..."
-        stop_validator
+        docker exec $CONTAINER_NAME pkill -f "solana-validator\|solana-test-validator"
+        sleep 2
     fi
     
-    # Start validator with entrypoint to the specified node
-    print_info "Starting validator with connection to $node_address..."
-    docker exec -d $CONTAINER_NAME bash -c "solana-test-validator \
+    # Start as RPC node (non-validating) with entrypoint
+    print_info "Starting RPC node connected to $node_address..."
+    docker exec -d $CONTAINER_NAME bash -c "solana-validator \
         --ledger /solana/ledger \
         --rpc-port 8899 \
+        --rpc-bind-address 0.0.0.0 \
         --gossip-port 8001 \
         --dynamic-port-range 8002-8020 \
         --entrypoint $node_address \
-        --no-poh-speed-test > /solana/validator.log 2>&1"
+        --no-voting \
+        --enable-rpc-transaction-history \
+        --enable-cpi-and-log-storage \
+        > /solana/validator.log 2>&1"
     
     sleep 5
     
-    if docker exec $CONTAINER_NAME pgrep -f solana-test-validator > /dev/null 2>&1; then
-        print_info "Validator connected to $node_address successfully!"
+    if docker exec $CONTAINER_NAME pgrep -f solana-validator > /dev/null 2>&1; then
+        print_info "RPC node connected to $node_address successfully!"
+        print_info "Node is syncing blocks (non-validating mode)"
+        print_info "RPC endpoint: http://localhost:8899"
+        print_info "Check logs: docker exec $CONTAINER_NAME tail -f /solana/validator.log"
     else
         print_error "Failed to connect. Check logs for details."
     fi
@@ -648,6 +703,10 @@ case "$1" in
         check_docker
         if [ "$2" == "-s" ]; then
             stop_validator
+        elif [ "$2" == "-p" ]; then
+            pause_validator
+        elif [ "$2" == "-r" ]; then
+            resume_validator
         else
             start_validator
         fi
