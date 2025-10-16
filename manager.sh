@@ -239,15 +239,15 @@ init_network() {
     
     # Generate validator identity
     print_info "Generating validator identity..."
-    docker exec $CONTAINER_NAME solana-keygen new --no-bip39-passphrase -o /solana/config/validator-keypair.json --force
+    docker exec $CONTAINER_NAME /root/.local/share/solana/install/active_release/bin/solana-keygen new --no-bip39-passphrase -o /solana/config/validator-keypair.json --force
     
     # Generate vote account
     print_info "Generating vote account..."
-    docker exec $CONTAINER_NAME solana-keygen new --no-bip39-passphrase -o /solana/config/vote-account-keypair.json --force
+    docker exec $CONTAINER_NAME /root/.local/share/solana/install/active_release/bin/solana-keygen new --no-bip39-passphrase -o /solana/config/vote-account-keypair.json --force
     
     # Create genesis config
     print_info "Creating genesis configuration..."
-    docker exec $CONTAINER_NAME bash -c "cd /solana/ledger && solana-genesis \
+    docker exec $CONTAINER_NAME bash -c "cd /solana/ledger && /root/.local/share/solana/install/active_release/bin/solana-genesis \
         --bootstrap-validator \
         /solana/config/validator-keypair.json \
         /solana/config/vote-account-keypair.json \
@@ -257,7 +257,7 @@ init_network() {
         --hashes-per-tick auto"
     
     print_info "Network initialized successfully!"
-    print_info "Validator identity: $(docker exec $CONTAINER_NAME solana-keygen pubkey /solana/config/validator-keypair.json)"
+    print_info "Validator identity: $(docker exec $CONTAINER_NAME /root/.local/share/solana/install/active_release/bin/solana-keygen pubkey /solana/config/validator-keypair.json)"
 }
 
 # Start validator
