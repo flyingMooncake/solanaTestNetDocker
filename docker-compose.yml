@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  solana-testnet:
+    build: .
+    container_name: solana-testnet
+    hostname: solana-testnet
+    ports:
+      - "0.0.0.0:8001:8001"   # Gossip
+      - "0.0.0.0:8899:8899"   # RPC
+      - "0.0.0.0:8900:8900"   # RPC PubSub
+      - "0.0.0.0:8003:8003"   # TVU
+      - "0.0.0.0:8004:8004"   # TPU
+    volumes:
+      - ./data/ledger:/solana/ledger
+      - ./data/config:/solana/config
+      - ./data/accounts:/solana/accounts
+    networks:
+      - solana-network
+    restart: unless-stopped
+    environment:
+      - SOLANA_RUN_SH_VALIDATOR_ARGS=--rpc-bind-address 0.0.0.0
+
+networks:
+  solana-network:
+    driver: bridge
