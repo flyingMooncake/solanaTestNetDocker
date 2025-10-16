@@ -35,60 +35,8 @@ check_container() {
 
 # Get all key files
 get_key_files() {
-    local keys=()
-    
-    # Add validator keypair
-    if [ -f "$CONFIG_DIR/validator-keypair.json" ]; then
-        keys+=("$CONFIG_DIR/validator-keypair.json")
-    fi
-    
-    # Add vote account keypair
-    if [ -f "$CONFIG_DIR/vote-account-keypair.json" ]; then
-        keys+=("$CONFIG_DIR/vote-account-keypair.json")
-    fi
-    
-    # Add stake account keypair
-    if [ -f "$ACCOUNTS_DIR/stake-account.json" ]; then
-        keys+=("$ACCOUNTS_DIR/stake-account.json")
-    fi
-    
-    # Add all other JSON files from config directory
-    if [ -d "$CONFIG_DIR" ]; then
-        for keyfile in "$CONFIG_DIR"/*.json; do
-            if [ -f "$keyfile" ]; then
-                local already_added=0
-                for existing in "${keys[@]}"; do
-                    if [ "$existing" = "$keyfile" ]; then
-                        already_added=1
-                        break
-                    fi
-                done
-                if [ $already_added -eq 0 ]; then
-                    keys+=("$keyfile")
-                fi
-            fi
-        done
-    fi
-    
-    # Add all JSON files from accounts directory
-    if [ -d "$ACCOUNTS_DIR" ]; then
-        for keyfile in "$ACCOUNTS_DIR"/*.json; do
-            if [ -f "$keyfile" ]; then
-                local already_added=0
-                for existing in "${keys[@]}"; do
-                    if [ "$existing" = "$keyfile" ]; then
-                        already_added=1
-                        break
-                    fi
-                done
-                if [ $already_added -eq 0 ]; then
-                    keys+=("$keyfile")
-                fi
-            fi
-        done
-    fi
-    
-    echo "${keys[@]}"
+    # Find all JSON files in both directories
+    find "$CONFIG_DIR" "$ACCOUNTS_DIR" -type f -name "*.json" 2>/dev/null | sort
 }
 
 # Show all keys
@@ -96,26 +44,26 @@ show_keys() {
     print_info "Available Keys:"
     echo ""
     
-    local keys=($(get_key_files))
-    
-    if [ ${#keys[@]} -eq 0 ]; then
-        print_warning "No keys found."
-        return
-    fi
-    
     local index=1
-    for keyfile in "${keys[@]}"; do
-        local filename=$(basename "$keyfile")
-        local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
-        
-        if [ $? -eq 0 ]; then
+    local found=0
+    
+    while IFS= read -r keyfile; do
+        if [ -f "$keyfile" ]; then
+            found=1
+            local filename=$(basename "$keyfile")
+            local pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
+            
             print_key "$index" "$filename"
             echo "    Path: $keyfile"
             echo "    Public Key: $pubkey"
             echo ""
+            ((index++))
         fi
-        ((index++))
-    done
+    done < <(get_key_files)
+    
+    if [ $found -eq 0 ]; then
+        print_warning "No keys found."
+    fi
 }
 
 # Get key file by index
