@@ -378,7 +378,8 @@ airdrop_sol() {
     # Determine target
     if [ "$target_type" == "-n" ]; then
         keyfile=$(get_key_by_index $target_value)
-        pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$keyfile" 2>/dev/null)
+        local container_path=$(host_to_container_path "$keyfile")
+        pubkey=$(docker exec $CONTAINER_NAME solana-keygen pubkey "$container_path" 2>/dev/null)
         print_info "Airdropping to key #$target_value..."
     elif [ "$target_type" == "-k" ]; then
         pubkey="$target_value"
@@ -490,78 +491,47 @@ Solana Key Manager
 
 Usage: ./keymanager.sh [OPTION]
 
-Key Management:
-  --list                       List all available keys with indices
-  --generate [name]            Generate new keypair (optional: specify name)
-  --export -n <index> [file]   Export private key by index to JSON file
-  --export -pubkey <key> [file]
-                               Export private key by public key to JSON file
-  --import <file> [name]       Import private key from JSON file
-
-Balance Operations:
-  --balance -n <index>         Show balance of key by index number
-  --balance -k <pubkey>        Show balance of key by public key
-  --airdrop -n <index> [amount]
-                               Airdrop SOL to key by index (default: 100 SOL)
-  --airdrop -k <pubkey> [amount]
-                               Airdrop SOL to public key (default: 100 SOL)
-
-Transfer Operations:
+Options:
+  --list                                List all available keys with indices
+  --generate [name]                     Generate new keypair (optional: specify name)
+  --export -n <index> [file]            Export private key by index to JSON file
+  --export -pubkey <key> [file]         Export private key by public key to JSON file
+  --import <file> [name]                Import private key from JSON file
+  --balance -n <index>                  Show balance of key by index number
+  --balance -k <pubkey>                 Show balance of key by public key
+  --airdrop -n <index> [amount]         Airdrop SOL to key by index (default: 100 SOL)
+  --airdrop -k <pubkey> [amount]        Airdrop SOL to public key (default: 100 SOL)
   --send -n <index> -r <receiver> -a <amount>
-                               Send SOL from key index to receiver
+                                        Send SOL from key index to receiver
   --send -k <pubkey> -r <receiver> -a <amount>
-                               Send SOL from public key to receiver
+                                        Send SOL from public key to receiver
+  --block                               Show current block/slot information
+  --block <slot>                        Show specific block details by slot number
+  --help                                Show this help message
 
-Block Information:
-  --block                      Show current block/slot information
-  --block <slot>               Show specific block details by slot number
-
-Examples:
-  # List all keys
+Key Management Examples:
   ./keymanager.sh --list
-
-  # Generate new keypair with auto-generated name
   ./keymanager.sh --generate
-
-  # Generate new keypair with custom name
   ./keymanager.sh --generate my-wallet
-
-  # Export key #1 to file
   ./keymanager.sh --export -n 1
   ./keymanager.sh --export -n 1 my-backup.json
-
-  # Export key by public key
   ./keymanager.sh --export -pubkey 7xJ...abc backup.json
-
-  # Import key from file
   ./keymanager.sh --import my-key.json
   ./keymanager.sh --import my-key.json my-wallet
 
-  # Get balance of key #1
+Balance & Airdrop Examples:
   ./keymanager.sh --balance -n 1
-
-  # Get balance by public key
   ./keymanager.sh --balance -k 7xJ...abc
-
-  # Airdrop 100 SOL to key #1 (default amount)
   ./keymanager.sh --airdrop -n 1
-
-  # Airdrop 500 SOL to key #2
   ./keymanager.sh --airdrop -n 2 500
-
-  # Airdrop to public key
   ./keymanager.sh --airdrop -k 7xJ...abc 1000
 
-  # Send 10 SOL from key #1 to another address
+Transfer Examples:
   ./keymanager.sh --send -n 1 -r 7xJ...xyz -a 10
-
-  # Send 5 SOL from public key to another address
   ./keymanager.sh --send -k 7xJ...abc -r 7xJ...xyz -a 5
 
-  # Show current block info
+Block Information Examples:
   ./keymanager.sh --block
-
-  # Show specific block details
   ./keymanager.sh --block 12345
 
 EOF
